@@ -1,71 +1,87 @@
+import magic
 from django.http import JsonResponse
 from django.conf import settings
-from django.views.decorators.csrf import csrf_exempt  # New import for security bypass
+from django.views.decorators.csrf import csrf_exempt
 from .models import ResearchMaterial
 from google import genai
 
 
+@csrf_exempt
 def test_gemini(_request):
     """
-    Diagnostic view to confirm Cerebro's heart is beating.
+    Standard heartbeat check to verify the neural link with Gemini 3.
+    Required for baseline system diagnostics.
     """
     try:
         client = genai.Client(api_key=settings.GEMINI_API_KEY)
         response = client.models.generate_content(
             model="gemini-3-flash-preview",
-            contents="Cerebro, confirm you are awake."
+            contents="Cerebro: System check. Are you operational?"
         )
-        return JsonResponse({"status": "Cerebro is Alive", "message": response.text})
+        return JsonResponse({"status": "Online", "message": response.text})
     except Exception as e:
-        return JsonResponse({"status": "Connection Failed", "reason": str(e)}, status=500)
+        return JsonResponse({"status": "Offline", "error": str(e)}, status=500)
 
 
-@csrf_exempt  # This stops the 403 Forbidden error for our API tests
+@csrf_exempt
 def process_multimodal_input(request):
     """
-    Cerebro's 'Eyes and Ears'.
-    Processes uploaded research files using Gemini 3's native multimodal power.
+    Cerebro's Multimodal Engine.
+    Handles high-speed ingestion of Images, Audio, and Video.
+    Leverages Gemini 3 Flash for near-instant contextual analysis.
     """
-    # We check for POST and files here
-    if request.method == 'POST' and request.FILES.get('research_file'):
-        uploaded_file = request.FILES['research_file']
+    if request.method != 'POST':
+        return JsonResponse({"error": "Method not allowed. Use POST."}, status=405)
 
-        # Save to our local archive so the AI has something to read from
-        material = ResearchMaterial.objects.create(
-            title=request.POST.get('title', 'New Research Upload'),
-            file=uploaded_file,
-            file_type=request.POST.get('file_type', 'image')
+    uploaded_file = request.FILES.get('research_file')
+    if not uploaded_file:
+        return JsonResponse({"error": "No file detected in request."}, status=400)
+
+    # 1. Professional Metadata Extraction
+    # We use python-magic to detect the real file type, making the API 'smart'
+    file_buffer = uploaded_file.read(2048)
+    mime_type = magic.from_buffer(file_buffer, mime=True)
+    uploaded_file.seek(0)  # Reset pointer after reading
+
+    # 2. Database Persistence
+    # Saving the record first ensures we don't lose track of the user's data
+    material = ResearchMaterial.objects.create(
+        title=request.POST.get('title', f"Upload {uploaded_file.name}"),
+        file=uploaded_file,
+        file_type=mime_type.split('/')[0]  # Stores 'image', 'video', etc.
+    )
+
+    try:
+        # 3. Initialize Gemini 3 Client
+        client = genai.Client(api_key=settings.GEMINI_API_KEY)
+
+        # 4. Multimodal Processing
+        # We send the raw bytes for speed. For large videos (>20MB),
+        # we will later implement the File API upload method.
+        response = client.models.generate_content(
+            model="gemini-3-flash-preview",
+            contents=[
+                "Act as Cerebro, an AI Knowledge Agent. Analyze this material. "
+                "Provide a summary, extract key data points, and suggest next steps.",
+                uploaded_file.read()
+            ]
         )
 
-        try:
-            # Wake up the Brain
-            client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        # 5. Wisdom Archiving
+        material.analysis_result = response.text
+        material.save()
 
-            # Read the file bytes directly
-            with open(material.file.path, 'rb') as doc_file:
-                file_data = doc_file.read()
-
-            # The actual 'Multimodal' magic happens here
-            response = client.models.generate_content(
-                model="gemini-3-flash-preview",
-                contents=[
-                    "Analyze this research material. What are the core findings?",
-                    file_data
-                ]
-            )
-
-            # Store the wisdom
-            material.analysis_result = response.text
-            material.save()
-
-            return JsonResponse({
-                "status": "Success",
-                "cerebro_insight": response.text,
+        return JsonResponse({
+            "status": "Success",
+            "agent_response": {
+                "insight": response.text,
+                "file_type_detected": mime_type,
                 "record_id": material.pk
-            })
+            }
+        })
 
-        except Exception as e:
-            return JsonResponse({"status": "Neural Link Error", "error": str(e)}, status=500)
-
-    # If they send a GET or no file, we catch it here
-    return JsonResponse({"status": "Failed", "message": "Send a file via POST."}, status=400)
+    except Exception as e:
+        return JsonResponse({
+            "status": "Neural Link Error",
+            "trace": str(e)
+        }, status=500)

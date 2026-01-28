@@ -33,3 +33,6 @@ urllib3==2.6.3
 websockets==15.0.1
 
 protobuf
+
+python-magic
+Pillow
