@@ -15,6 +15,20 @@ graph TD
     G -->|Context Retrieval| D
     D -->|Search Results| F
     F -->|Synthesized Answer| A
+    
+    ## 🧪 Technical Implementation
+Cerebro is an autonomous knowledge management agent built on Django, leveraging the Gemini 3 Flash reasoning capabilities. 
+Unlike traditional RAG pipelines that simply retrieve text, Cerebro utilizes Sequential Function Calling and the ThinkingLevel.
+HIGH configuration to perform deep analysis before taking action.
+
+The system architecture features a Multimodal Ingestion Engine that processes image data using types.Part.from_bytes, storing structured insights in a relational database. 
+When queried via the Agentic Chat endpoint, Cerebro initiates a high-reasoning 'Thinking' phase. 
+If it determines that local context is required, it autonomously triggers the search_local_records tool.
+
+We solved the complexity of 'Thinking' responses by implementing a Custom Part Extraction Logic that isolates the model's final synthesis from its internal reasoning chain. 
+This ensures a clean, user-ready output while maintaining the 'Wow Factor' of seeing an AI decide how to research. 
+This setup provides a scalable foundation for future video and audio synthesis modules.    
+    
 🌟 Key Features
 Multimodal Perception: Real-time analysis of Images (PNG/JPG), and planned support for Video/Audio.
 
