@@ -7,15 +7,12 @@ from .models import ResearchMaterial
 from google import genai
 from google.genai import types
 
-
 # --- 1. THE TOOL (For Agentic Search) ---
 def search_local_records(query: str):
     results = ResearchMaterial.objects.filter(
         db_models.Q(title__icontains=query) | db_models.Q(analysis_result__icontains=query)
     )
-    return [{"title": r.title, "insight": r.analysis_result[:200] if r.analysis_result else "No analysis."} for r in
-            results]
-
+    return [{"title": r.title, "insight": r.analysis_result[:200] if r.analysis_result else "No analysis."} for r in results]
 
 # --- 2. MULTIMODAL INGESTION ---
 @csrf_exempt
@@ -54,7 +51,6 @@ def process_multimodal_input(request):
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 
-
 # --- 3. THE AGENT CHAT ---
 @csrf_exempt
 def agent_chat(request):
@@ -89,7 +85,7 @@ def agent_chat(request):
         parts = response.candidates[0].content.parts
         function_call = next((p.function_call for p in parts if p.function_call), None)
 
-        if function_call:
+        if function_call and function_call.name == "search_local_records":
             search_data = search_local_records(function_call.args["query"])
             final_response = client.models.generate_content(
                 model="gemini-3-flash-preview",
@@ -98,35 +94,33 @@ def agent_chat(request):
                     response.candidates[0].content,
                     types.Content(
                         role="tool",
-                        parts=[types.Part.from_function_response(name=function_call.name,
-                                                                 response={"result": search_data})]
+                        parts=[types.Part.from_function_response(name=function_call.name, response={"result": search_data})]
                     )
                 ]
             )
-            return JsonResponse({"cerebro_answer": final_response.text})
+            return JsonResponse({
+                "cerebro_answer": final_response.text,
+                "agent_logic": f"Searched records for: {function_call.args['query']}"
+            })
 
         return JsonResponse({"cerebro_answer": response.text})
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 
-
-# --- 4. MANUAL SEARCH (Required by your urls.py) ---
+# --- 4. MANUAL SEARCH ---
 @csrf_exempt
 def search_research(request):
     query = request.GET.get('q', '')
-    results = ResearchMaterial.objects.filter(
-        db_models.Q(title__icontains=query) | db_models.Q(analysis_result__icontains=query))
+    results = ResearchMaterial.objects.filter(db_models.Q(title__icontains=query) | db_models.Q(analysis_result__icontains=query))
     data = [{"title": r.title, "uploaded_at": r.uploaded_at} for r in results]
     return JsonResponse({"status": "Success", "results": data})
 
-
-# --- 5. SYNTHESIZE KNOWLEDGE (The one that was missing!) ---
+# --- 5. SYNTHESIZE KNOWLEDGE ---
 @csrf_exempt
 def synthesize_knowledge(request):
     topic = request.GET.get('topic', '')
     materials = ResearchMaterial.objects.filter(db_models.Q(title__icontains=topic))
     if not materials.exists(): return JsonResponse({"error": "No data found"}, status=404)
-
     context = "\n".join([f"Source: {m.title}\nInsight: {m.analysis_result}" for m in materials])
     try:
         client = genai.Client(api_key=settings.GEMINI_API_KEY)
