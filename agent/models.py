@@ -11,10 +11,13 @@ class ResearchMaterial(models.Model):
 
     title = models.CharField(max_length=255, blank=True)
     file = models.FileField(upload_to='uploads/%Y/%m/%d/')
-    file_type = models.CharField(max_length=10, choices=FILE_TYPES)
-    uploaded_at = models.DateTimeField(auto_now_add=True)
+    file_type = models.CharField(max_length=50, choices=FILE_TYPES)  # Increased length for flexibility
 
-    # This will store the AI's analysis of the file
+    # We keep your 'uploaded_at' and add 'updated_at' for senior dev tracking
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # This stores the AI's analysis
     analysis_result = models.TextField(blank=True, null=True)
 
     def __str__(self):
