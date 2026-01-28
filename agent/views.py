@@ -1,3 +1,5 @@
+import os
+import time
 import magic
 from django.db import models as db_models
 from django.http import JsonResponse
@@ -10,6 +12,7 @@ from google.genai import types
 
 # --- 1. THE TOOL (For Agentic Search) ---
 def search_local_records(query: str):
+    # FIXED: Changed function calls () to keyword arguments =
     results = ResearchMaterial.objects.filter(
         db_models.Q(title__icontains=query) | db_models.Q(analysis_result__icontains=query)
     )
@@ -17,7 +20,7 @@ def search_local_records(query: str):
             results]
 
 
-# --- 2. MULTIMODAL INGESTION ---
+# --- 2. MULTIMODAL INGESTION (Supports Image, Audio, Video, Opus) ---
 @csrf_exempt
 def process_multimodal_input(request):
     if request.method != 'POST': return JsonResponse({"error": "POST only"}, status=405)
@@ -26,33 +29,70 @@ def process_multimodal_input(request):
 
     file_data = uploaded_file.read()
     mime_type = magic.from_buffer(file_data, mime=True)
-    uploaded_file.seek(0)
 
+    if uploaded_file.name.endswith('.opus'):
+        mime_type = 'audio/opus'
+
+    uploaded_file.seek(0)
+    file_category = mime_type.split('/')[0]
+    if 'pdf' in mime_type: file_category = 'pdf'
+
+    # Note: Ensure your 'ResearchMaterial' model has a 'file' field!
     material = ResearchMaterial.objects.create(
         title=request.POST.get('title', uploaded_file.name),
         file=uploaded_file,
-        file_type=mime_type.split('/')[0]
+        file_type=file_category
     )
 
     try:
         client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model="gemini-3-flash-preview",
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_bytes(data=file_data, mime_type=mime_type),
-                        types.Part.from_text(text="Analyze this as Cerebro Agent.")
-                    ]
-                )
-            ]
-        )
+
+        if file_category in ['video', 'audio']:
+            temp_path = f"temp_{uploaded_file.name}"
+            with open(temp_path, "wb") as f:
+                f.write(file_data)
+
+            google_file = client.files.upload(file=temp_path)
+
+            while google_file.state.name == "PROCESSING":
+                time.sleep(2)
+                google_file = client.files.get(name=google_file.name)
+
+            if os.path.exists(temp_path): os.remove(temp_path)
+
+            prompt = "Watch this video carefully. Summary of events please." if file_category == 'video' else "Listen to this audio. Provide transcript and summary."
+
+            response = client.models.generate_content(
+                model="gemini-3-flash-preview",
+                contents=[google_file, prompt]
+            )
+        else:
+            prompt = "Analyze this content as Cerebro Agent. Identify objects, text, and brand identity."
+            response = client.models.generate_content(
+                model="gemini-3-flash-preview",
+                contents=[
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part.from_bytes(data=file_data, mime_type=mime_type),
+                            types.Part.from_text(text=prompt)
+                        ]
+                    )
+                ]
+            )
+
         material.analysis_result = response.text
         material.save()
-        return JsonResponse({"status": "Success", "insight": response.text, "id": material.pk})
+        return JsonResponse({
+            "status": "Success",
+            "detected_as": mime_type,
+            "insight": response.text,
+            "id": material.pk
+        })
+
     except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
+        print(f"DEBUG ERROR: {str(e)}")
+        return JsonResponse({"error": f"AI Processing Error: {str(e)}"}, status=500)
 
 
 # --- 3. THE AGENT CHAT (Agentic Brain) ---
@@ -99,32 +139,22 @@ def agent_chat(request):
                     response.candidates[0].content,
                     types.Content(
                         role="tool",
-                        parts=[types.Part.from_function_response(name=function_call.name,
-                                                                 response={"result": search_data})]
+                        parts=[types.Part.from_function_response(
+                            name=function_call.name,
+                            response={"result": search_data}
+                        )]
                     )
                 ]
             )
 
-            # --- UPDATED: No-Fail Extraction Logic ---
-            ans_text = ""
-            # Check for text in the final turn
-            if final_turn.candidates[0].content.parts:
-                for p in final_turn.candidates[0].content.parts:
-                    if p.text:
-                        ans_text += p.text
-
-            # If Gemini put the answer in 'thought', we extract that as a fallback
-            if not ans_text and final_turn.candidates[0].avg_logprobs:  # Check if thoughts exist
-                ans_text = "I have processed your records. I found information regarding the logo you uploaded."
+            ans_text = "".join([p.text for p in final_turn.candidates[0].content.parts if p.text])
 
             return JsonResponse({
-                "cerebro_answer": ans_text if ans_text else "Yes, I found the logo in your records. It appears to be the Viviano wine app logo.",
+                "cerebro_answer": ans_text if ans_text else "Found records, but couldn't summarize.",
                 "agent_logic": f"Autonomous Search: {function_call.args['query']}"
             })
 
-
-        # Fallback for standard responses
-        return JsonResponse({"cerebro_answer": response.text if response.text else "Cerebro is thinking..."})
+        return JsonResponse({"cerebro_answer": response.text if response.text else "Cerebro is processing..."})
 
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
@@ -134,6 +164,7 @@ def agent_chat(request):
 @csrf_exempt
 def search_research(request):
     query = request.GET.get('q', '')
+    # FIXED: Changed function calls () to keyword arguments =
     results = ResearchMaterial.objects.filter(
         db_models.Q(title__icontains=query) | db_models.Q(analysis_result__icontains=query))
     data = [{"title": r.title, "uploaded_at": r.uploaded_at} for r in results]
@@ -144,6 +175,7 @@ def search_research(request):
 @csrf_exempt
 def synthesize_knowledge(request):
     topic = request.GET.get('topic', '')
+    # FIXED: Changed function calls () to keyword arguments =
     materials = ResearchMaterial.objects.filter(db_models.Q(title__icontains=topic))
     if not materials.exists(): return JsonResponse({"error": "No data found"}, status=404)
     context = "\n".join([f"Source: {m.title}\nInsight: {m.analysis_result}" for m in materials])
