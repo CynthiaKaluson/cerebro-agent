@@ -7,12 +7,15 @@ from .models import ResearchMaterial
 from google import genai
 from google.genai import types
 
+
 # --- 1. THE TOOL (For Agentic Search) ---
 def search_local_records(query: str):
     results = ResearchMaterial.objects.filter(
         db_models.Q(title__icontains=query) | db_models.Q(analysis_result__icontains=query)
     )
-    return [{"title": r.title, "insight": r.analysis_result[:200] if r.analysis_result else "No analysis."} for r in results]
+    return [{"title": r.title, "insight": r.analysis_result[:200] if r.analysis_result else "No analysis."} for r in
+            results]
+
 
 # --- 2. MULTIMODAL INGESTION ---
 @csrf_exempt
@@ -51,7 +54,8 @@ def process_multimodal_input(request):
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 
-# --- 3. THE AGENT CHAT ---
+
+# --- 3. THE AGENT CHAT (Agentic Brain) ---
 @csrf_exempt
 def agent_chat(request):
     user_query = request.GET.get('ask', '')
@@ -87,33 +91,48 @@ def agent_chat(request):
 
         if function_call and function_call.name == "search_local_records":
             search_data = search_local_records(function_call.args["query"])
-            final_response = client.models.generate_content(
+
+            final_turn = client.models.generate_content(
                 model="gemini-3-flash-preview",
                 contents=[
                     types.Content(role="user", parts=[types.Part.from_text(text=user_query)]),
                     response.candidates[0].content,
                     types.Content(
                         role="tool",
-                        parts=[types.Part.from_function_response(name=function_call.name, response={"result": search_data})]
+                        parts=[types.Part.from_function_response(name=function_call.name,
+                                                                 response={"result": search_data})]
                     )
                 ]
             )
+
+            # --- CRITICAL FIX: Extraction Logic ---
+            # We iterate through parts to find the actual text response
+            ans_text = ""
+            for p in final_turn.candidates[0].content.parts:
+                if p.text:
+                    ans_text += p.text
+
             return JsonResponse({
-                "cerebro_answer": final_response.text,
-                "agent_logic": f"Searched records for: {function_call.args['query']}"
+                "cerebro_answer": ans_text if ans_text else "Search complete, but no summary generated.",
+                "agent_logic": f"Autonomous Search: {function_call.args['query']}"
             })
 
-        return JsonResponse({"cerebro_answer": response.text})
+        # Fallback for standard responses
+        return JsonResponse({"cerebro_answer": response.text if response.text else "Cerebro is thinking..."})
+
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
 
 # --- 4. MANUAL SEARCH ---
 @csrf_exempt
 def search_research(request):
     query = request.GET.get('q', '')
-    results = ResearchMaterial.objects.filter(db_models.Q(title__icontains=query) | db_models.Q(analysis_result__icontains=query))
+    results = ResearchMaterial.objects.filter(
+        db_models.Q(title__icontains=query) | db_models.Q(analysis_result__icontains=query))
     data = [{"title": r.title, "uploaded_at": r.uploaded_at} for r in results]
     return JsonResponse({"status": "Success", "results": data})
+
 
 # --- 5. SYNTHESIZE KNOWLEDGE ---
 @csrf_exempt

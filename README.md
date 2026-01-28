@@ -1,33 +1,41 @@
-# Cerebro AI Agent 🧠
+# Cerebro: Autonomous Multimodal Knowledge API 🧠
+**A Submission for the Google Gemini 3 Hackathon**
 
-## Architecture Overview
-The following diagram illustrates how Cerebro processes multimodal inputs and uses Gemini 3 Reasoning to call local database tools.
+Cerebro is a next-generation AI agent that acts as a central "Neural Hub" for complex research. Unlike standard RAG systems, Cerebro uses **Gemini 3’s high-level reasoning** to autonomously decide when to search its internal knowledge base and how to synthesize multimodal data.
 
+## 🏗️ Architecture
 ```mermaid
 graph TD
     A[User/Client] -->|Multimodal Upload| B(Django API: process-file)
-    A -->|Text Query| C(Django API: chat)
-    B -->|Ingest| D[(PostgreSQL/SQLite)]
-    B -->|Analysis| E[Gemini 3 Flash]
-    E -->|Metadata| D
-    C -->|Reasoning| F{Gemini 3 Thinking}
-    F -->|Tool Call| G[search_local_records]
-    G -->|Context| D
-    D -->|Results| F
-    F -->|Final Answer| A
+    A -->|Natural Language Query| C(Django API: chat)
+    B -->|Ingest & Analyze| E[Gemini 3 Flash]
+    E -->|Structured Metadata| D[(Knowledge Store)]
+    C -->|Thinking Level: High| F{Gemini 3 Reasoning}
+    F -->|Autonomous Tool Call| G[search_local_records]
+    G -->|Context Retrieval| D
+    D -->|Search Results| F
+    F -->|Synthesized Answer| A
+🌟 Key Features
+Multimodal Perception: Real-time analysis of Images (PNG/JPG), and planned support for Video/Audio.
 
+Agentic Autonomy: Uses Sequential Function Calling to query local databases without human intervention.
 
-Cerebro: Autonomous Multimodal Research Agent
-Built for the Google Gemini 3 Hackathon
+Deep Reasoning: Leverages the ThinkingLevel.HIGH parameter for complex research synthesis.
 
-Cerebro is a central "brain" that uses Gemini 3's advanced reasoning to synthesize knowledge across text, audio, and video.
-
-🚀 Key Features (WIP)
-- Multimodal Synthesis: Reasoning across MP4, MP3, and PDF.
-- Agentic Workflows: Autonomous tool-use for deep research.
-- Thought Signatures: Persistent reasoning states.
+Thought Signatures: Designed to maintain reasoning context across multi-turn research sessions.
 
 🛠️ Tech Stack
-- Backend: Django & Django REST Framework
-- AI: Google Gemini 3 (Flash & Pro)
-- Database: PostgreSQL
+Framework: Django 5.2 (Python)
+
+AI Model: Gemini 3 Flash Preview (v1alpha)
+
+Database: SQLite/PostgreSQL
+
+Analysis: Google GenAI SDK
+
+🚀 Getting Started
+pip install -r requirements.txt
+
+python manage.py migrate
+
+python manage.py runserver
