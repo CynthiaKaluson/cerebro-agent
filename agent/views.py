@@ -1,7 +1,4 @@
-import os
-import time
-import magic
-from django.db import models as db_models
+from django.shortcuts import render
 from django.http import JsonResponse
 from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
@@ -10,181 +7,81 @@ from google import genai
 from google.genai import types
 
 
-# --- 1. THE TOOL (For Agentic Search) ---
-def search_local_records(query: str):
-    # FIXED: Changed function calls () to keyword arguments =
-    results = ResearchMaterial.objects.filter(
-        db_models.Q(title__icontains=query) | db_models.Q(analysis_result__icontains=query)
-    )
-    return [{"title": r.title, "insight": r.analysis_result[:200] if r.analysis_result else "No analysis."} for r in
-            results]
+def index(request):
+    materials = ResearchMaterial.objects.all().order_by('-uploaded_at')
+    return render(request, 'agent/index.html', {'materials': materials})
 
 
-# --- 2. MULTIMODAL INGESTION (Supports Image, Audio, Video, Opus) ---
-@csrf_exempt
+@csrf_exempt  # This fixes the 'Forbidden (CSRF token missing)' error
 def process_multimodal_input(request):
-    if request.method != 'POST': return JsonResponse({"error": "POST only"}, status=405)
-    uploaded_file = request.FILES.get('research_file')
-    if not uploaded_file: return JsonResponse({"error": "No file detected"}, status=400)
+    if request.method == "POST":
+        uploaded_file = request.FILES.get('research_file')
+        title = request.POST.get('title', 'Untitled Research')
 
-    file_data = uploaded_file.read()
-    mime_type = magic.from_buffer(file_data, mime=True)
+        if not uploaded_file:
+            return JsonResponse({"status": "Error", "error": "No file provided"}, status=400)
 
-    if uploaded_file.name.endswith('.opus'):
-        mime_type = 'audio/opus'
+        material = ResearchMaterial.objects.create(
+            title=title, file=uploaded_file, file_type='video'
+        )
 
-    uploaded_file.seek(0)
-    file_category = mime_type.split('/')[0]
-    if 'pdf' in mime_type: file_category = 'pdf'
-
-    # Note: Ensure your 'ResearchMaterial' model has a 'file' field!
-    material = ResearchMaterial.objects.create(
-        title=request.POST.get('title', uploaded_file.name),
-        file=uploaded_file,
-        file_type=file_category
-    )
-
-    try:
         client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        config = types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+            media_resolution=types.MediaResolution.MEDIA_RESOLUTION_LOW,
+            temperature=1.0
+        )
 
-        if file_category in ['video', 'audio']:
-            temp_path = f"temp_{uploaded_file.name}"
-            with open(temp_path, "wb") as f:
-                f.write(file_data)
+        try:
+            # Important: Use the file path for video processing
+            with open(material.file.path, 'rb') as doc_file:
+                file_data = doc_file.read()
 
-            google_file = client.files.upload(file=temp_path)
-
-            while google_file.state.name == "PROCESSING":
-                time.sleep(2)
-                google_file = client.files.get(name=google_file.name)
-
-            if os.path.exists(temp_path): os.remove(temp_path)
-
-            prompt = "Watch this video carefully. Summary of events please." if file_category == 'video' else "Listen to this audio. Provide transcript and summary."
-
-            response = client.models.generate_content(
-                model="gemini-3-flash-preview",
-                contents=[google_file, prompt]
-            )
-        else:
-            prompt = "Analyze this content as Cerebro Agent. Identify objects, text, and brand identity."
             response = client.models.generate_content(
                 model="gemini-3-flash-preview",
                 contents=[
-                    types.Content(
-                        role="user",
-                        parts=[
-                            types.Part.from_bytes(data=file_data, mime_type=mime_type),
-                            types.Part.from_text(text=prompt)
-                        ]
-                    )
-                ]
+                    types.Part.from_bytes(data=file_data, mime_type=uploaded_file.content_type),
+                    f"Analyze this research material titled '{title}'. Summarize key points."
+                ],
+                config=config
             )
+            material.analysis_result = response.text
+            material.save()
+            return JsonResponse({"status": "Success", "analysis": response.text})
+        except Exception as e:
+            return JsonResponse({"status": "Error", "error": str(e)}, status=500)
 
-        material.analysis_result = response.text
-        material.save()
-        return JsonResponse({
-            "status": "Success",
-            "detected_as": mime_type,
-            "insight": response.text,
-            "id": material.pk
-        })
-
-    except Exception as e:
-        print(f"DEBUG ERROR: {str(e)}")
-        return JsonResponse({"error": f"AI Processing Error: {str(e)}"}, status=500)
+    return JsonResponse({"status": "Error", "error": "Invalid method"}, status=400)
 
 
-# --- 3. THE AGENT CHAT (Agentic Brain) ---
-@csrf_exempt
 def agent_chat(request):
-    user_query = request.GET.get('ask', '')
-    if not user_query: return JsonResponse({"error": "Ask a question."}, status=400)
+    user_query = request.GET.get('ask', '').lower()
+    if not user_query:
+        return JsonResponse({"error": "No query"}, status=400)
+
+    # FEATURE: Fetch the latest analyzed research to provide context
+    latest_research = ResearchMaterial.objects.exclude(analysis_result__isnull=True).last()
+    context = ""
+    if latest_research and "video" in user_query or "content" in user_query:
+        context = f"The user recently uploaded a file titled '{latest_research.title}'. Its analysis is: {latest_research.analysis_result}. "
+
+    client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
     try:
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        search_tool = types.Tool(
-            function_declarations=[
-                types.FunctionDeclaration(
-                    name="search_local_records",
-                    description="Search the local database.",
-                    parameters=types.Schema(
-                        type=types.Type.OBJECT,
-                        properties={"query": types.Schema(type=types.Type.STRING)},
-                        required=["query"]
-                    )
-                )
-            ]
-        )
+        # We combine the context from the DB with the user's question
+        full_prompt = f"{context} User Question: {user_query}"
 
         response = client.models.generate_content(
             model="gemini-3-flash-preview",
-            contents=user_query,
+            contents=full_prompt,
             config=types.GenerateContentConfig(
-                tools=[search_tool],
-                thinking_config=types.ThinkingConfig(include_thoughts=True, thinking_level=types.ThinkingLevel.HIGH)
+                thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW)
             )
         )
 
-        parts = response.candidates[0].content.parts
-        function_call = next((p.function_call for p in parts if p.function_call), None)
-
-        if function_call and function_call.name == "search_local_records":
-            search_data = search_local_records(function_call.args["query"])
-
-            final_turn = client.models.generate_content(
-                model="gemini-3-flash-preview",
-                contents=[
-                    types.Content(role="user", parts=[types.Part.from_text(text=user_query)]),
-                    response.candidates[0].content,
-                    types.Content(
-                        role="tool",
-                        parts=[types.Part.from_function_response(
-                            name=function_call.name,
-                            response={"result": search_data}
-                        )]
-                    )
-                ]
-            )
-
-            ans_text = "".join([p.text for p in final_turn.candidates[0].content.parts if p.text])
-
-            return JsonResponse({
-                "cerebro_answer": ans_text if ans_text else "Found records, but couldn't summarize.",
-                "agent_logic": f"Autonomous Search: {function_call.args['query']}"
-            })
-
-        return JsonResponse({"cerebro_answer": response.text if response.text else "Cerebro is processing..."})
-
-    except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
-
-
-# --- 4. MANUAL SEARCH ---
-@csrf_exempt
-def search_research(request):
-    query = request.GET.get('q', '')
-    # FIXED: Changed function calls () to keyword arguments =
-    results = ResearchMaterial.objects.filter(
-        db_models.Q(title__icontains=query) | db_models.Q(analysis_result__icontains=query))
-    data = [{"title": r.title, "uploaded_at": r.uploaded_at} for r in results]
-    return JsonResponse({"status": "Success", "results": data})
-
-
-# --- 5. SYNTHESIZE KNOWLEDGE ---
-@csrf_exempt
-def synthesize_knowledge(request):
-    topic = request.GET.get('topic', '')
-    # FIXED: Changed function calls () to keyword arguments =
-    materials = ResearchMaterial.objects.filter(db_models.Q(title__icontains=topic))
-    if not materials.exists(): return JsonResponse({"error": "No data found"}, status=404)
-    context = "\n".join([f"Source: {m.title}\nInsight: {m.analysis_result}" for m in materials])
-    try:
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model="gemini-3-flash-preview",
-            contents=f"Synthesize these research materials into one report about {topic}:\n\n{context}"
-        )
-        return JsonResponse({"synthesis": response.text})
+        return JsonResponse({
+            "cerebro_answer": response.text,
+            "agent_logic": "Context retrieved from Research Vault. Synthesizing..."
+        })
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)

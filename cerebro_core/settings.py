@@ -119,8 +119,13 @@ import os
 
 # ... existing code ...
 
-# URL used to access the files via browser
+# Media files configuration
 MEDIA_URL = '/media/'
-
-# The physical folder on your computer where files will be saved
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+# 50MB Upload Limits for Hackathon Videos
+DATA_UPLOAD_MAX_MEMORY_SIZE = 52428800
+FILE_UPLOAD_MAX_MEMORY_SIZE = 52428800
+
+# API Key from your .env
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
